@@ -8,3 +8,15 @@
 
 class ParseHeaderException(Exception):
     pass
+
+
+class StartRequestError(Exception):
+    pass
+
+
+class HandleResponseHeadersError(Exception):
+    pass
+
+
+class ExecuteMiddlewareError(Exception):
+    pass
