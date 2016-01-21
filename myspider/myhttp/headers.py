@@ -8,7 +8,7 @@
 
 import re
 from w3lib.http import headers_dict_to_raw
-from myspider.utils.datatypes import CaselessDict
+from myspider.utils.datastructs import CaselessDict
 from myspider.utils.python import to_unicode
 
 
