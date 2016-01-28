@@ -6,15 +6,27 @@
 # ---------------------------------------
 
 
+#!/usr/bin/env python
+# _*_ encoding: utf-8 _*_
+# @author: jlfgeek
+# @time: 2017-07-28 06:22:00
+
+
+import re
 import chardet
 from pyquery import PyQuery
+from myspider.myhttp.headers import Headers
+from myspider.myhttp.exceptions import ResponseAutoDecodeError
+
+
+_ENCODING_PATTERN = re.compile(r'.*?charset=(P?.*)', re.I)
 
 
 class Response(object):
 
-    def __init__(self, headers, status_code, body, url, request=None):
-        self._headers = headers
-        self._status_code = status_code
+    def __init__(self, url, status=200, headers=None, body=b'', request=None):
+        self._headers = headers or Headers({})
+        self._status = int(status)
         self._body = body
         self._url = url
         self._request = request
@@ -30,14 +42,21 @@ class Response(object):
         except AttributeError:
             raise AttributeError(
                 "Response.meta not available, this response "
-                "is not tied to any request"
-
-
-            )
+                "is not tied to any request")
 
     @property
-    def status_code(self):
-        return self._status_code
+    def status(self):
+        return self._status
+
+    @property
+    def encoding(self):
+        _encoding = None
+        content_type = self.headers.get('Content-Type', None).decode('utf-8')
+        if content_type:
+            m = re.match(_ENCODING_PATTERN, content_type)
+            if m:
+                _encoding = m.groups()[0].lower()
+        return _encoding
 
     @property
     def body(self):
@@ -64,14 +83,6 @@ class Response(object):
         return _text
 
     def doc(self, encoding=None):
-        """
-        :rtype: PyQuery
-        :return: PyQuery
-        """
         html = self.text(encoding)
-        return PyQuery(html)
-
-
-class ResponseAutoDecodeError(Exception):
-    """自动解码错误"""
-    pass
+        doc = PyQuery(html)
+        return doc
