@@ -6,8 +6,12 @@
 # ---------------------------------------
 
 
+from myspider.myhttp.headers import Headers
+
+
 class Request(object):
-    def __init__(self, url, method="GET", data=None, headers=None, meta=None, cookies=None, callback=None):
+    def __init__(self, url, method="GET", data=None, headers=None,
+                 meta=None, cookies=None, dont_filter=True, callback=None, settings=None):
         """
         :param url:
         :param method:
@@ -18,18 +22,32 @@ class Request(object):
         self._url = url
         self._method = method
         self._data = data
-        self._headers = headers
+        self._headers = Headers(headers or {}, encoding='utf-8')
         self._meta = meta
-        self._cookies = cookies
+        self._cookies = cookies or {}
+        self._dont_filter = dont_filter
         self._callback = callback
+        self._settings = settings or {}
 
     @property
     def data(self):
         return self._data
 
     @property
+    def dont_filter(self):
+        return self._dont_filter
+
+    @property
     def method(self):
         return self._method
+
+    @property
+    def cookies(self):
+        return self._cookies
+
+    @property
+    def settings(self):
+        return self._settings
 
     @property
     def meta(self):
@@ -47,14 +65,6 @@ class Request(object):
     @property
     def headers(self):
         return self._headers
-
-    def add_header(self, header):
-        """
-        :param header: {"Referer": "http://www.example.com", "User-Agent": "easyspider"}
-        :return:
-        """
-        for k, v in header:
-            pass
 
     @property
     def url(self):
