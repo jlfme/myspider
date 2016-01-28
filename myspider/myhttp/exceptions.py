@@ -20,3 +20,7 @@ class HandleResponseHeadersError(Exception):
 
 class ExecuteMiddlewareError(Exception):
     pass
+
+
+class ResponseAutoDecodeError(Exception):
+    pass
