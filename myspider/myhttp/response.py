@@ -6,12 +6,6 @@
 # ---------------------------------------
 
 
-#!/usr/bin/env python
-# _*_ encoding: utf-8 _*_
-# @author: jlfgeek
-# @time: 2017-07-28 06:22:00
-
-
 import re
 import chardet
 from pyquery import PyQuery
