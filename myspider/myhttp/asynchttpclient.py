@@ -6,100 +6,116 @@
 # ---------------------------------------
 
 
+
+
+#!/usr/bin/env python
+# _*_ encoding: utf-8 _*_
+# @author: jlfgeek
+# @time: 2017-07-28 06:16:00
+
+
+from io import BytesIO
+
 # We should ignore SIGPIPE when using pycurl.NOSIGNAL - see
 # the libcurl tutorial for more info.
 try:
     import signal
     from signal import SIGPIPE, SIGKILL, SIG_IGN
     signal.signal(signal.SIGPIPE, signal.SIG_IGN)
-
 except ImportError:
-    print("error")
+    raise ImportError("import signal module error")
 
 import pycurl
 import certifi
 import chardet
-from io import BytesIO
 from urllib.parse import urlencode
-
 from myspider.utils.log import Logger
-from myspider.myhttp.useragent import RandomUserAgent
 from myspider.myhttp.request import Request
 from myspider.myhttp.response import Response
+from myspider.utils.python import load_object
+from myspider.myhttp import defaults
 from myspider.myhttp.exceptions import ParseHeaderException
 
 
 logger = Logger.get_logger('AsyncHTTPClient', Logger.INFO, 'console')
 
 
+# CURL参数和默认配置的映射
+CURL_PARAMS_MAP = {
+    'FOLLOWLOCATION': (pycurl.FOLLOWLOCATION, 1),
+    'NOSIGNAL': (pycurl.NOSIGNAL, 1),
+    'KEEP_ALIVE_ENABLED': (pycurl.FORBID_REUSE, 1),
+    'CONTENT_ENCODING': (pycurl.ENCODING, 'gzip'),
+    'HTTPS_ENABLED': (pycurl.CAINFO, certifi.where()),
+    'DNS_TIMEOUT': (pycurl.DNS_CACHE_TIMEOUT, None),
+    'MAX_REDIRECT_NUMS': (pycurl.MAXREDIRS, None),
+    'TIMEOUT': (pycurl.TIMEOUT, None),
+    'CONNECT_TIMEOUT': (pycurl.CONNECTTIMEOUT, None)
+}
+
+
+class CurlFactory(object):
+
+    @staticmethod
+    def from_settings(settings):
+        """通过配置文件创建pycurl对象"""
+        curl = pycurl.Curl()
+
+        for k, v in CURL_PARAMS_MAP.items():
+            if v[1] is not None:
+                params, value = v[0], v[1]
+                curl.setopt(params, value)
+            if v[1] is None and settings.get(k, None):
+                params, value = v[0], settings[k]
+                curl.setopt(params, value)
+
+        if settings.get('COOKIES_ENABLED', None):
+            curl.setopt(pycurl.COOKIEJAR, 'cookies_file')
+            curl.setopt(pycurl.COOKIEFILE, 'cookies_file')
+        if settings.get('HTTP_PROXY', None):
+            curl.setopt(pycurl.PROXYTYPE, settings['HTTP_PROXY']['type'])
+            curl.setopt(pycurl.PROXY, settings['HTTP_PROXY']['url'])
+        if settings.get('USER_AGENT_CLASS', None):
+            user_agent_cls = load_object(settings['USER_AGENT_CLASS'])
+            if not hasattr(user_agent_cls, 'agent'):
+                raise NotImplementedError
+            else:
+                user_agent = user_agent_cls.agent()
+                curl.setopt(pycurl.USERAGENT, user_agent)
+        return curl
+
+
 class AsyncHTTPClient(object):
 
     def __init__(self, request_queue, max_clients=10,
-                 handle_response=None, handle_request_error=None):
-
+                 handle_response=None, handle_request_error=None, settings=None):
         self.request_queue = request_queue
         self._multi = pycurl.CurlMulti()
-        self._curls = [pycurl.Curl() for _ in range(max_clients)]
-        self._freelist = self._curls[:]        # free curl list
-        self.handle_response = handle_response            # callback, handle response
+        self.handle_response = handle_response              # callback, handle response
         self.handle_request_error = handle_request_error    # callback, handle request error
-        self._config = dict(user_agent=RandomUserAgent.agent(),
-                            handle_cookies=True,
-                            dns_timeout=3600,
-                            keep_alive=True,
-                            handle_https=True,
-                            max_redirs=5,
-                            timeout=5,
-                            connect_timeout=5,
-                            encoding="gzip",
-                            proxy={"status": False,
-                                   "value": {"type": 5, "address": "10.10.10.4:1080"}})
-        self.headers = {
-            "Accept-Language": "zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-        }
-        self._init_curl_config()
+        self.settings = self._read_settings(settings)
 
-    def _init_curl_config(self):
-        """initial configuration,  """
+        # headers
+        self.headers = self.settings.get('REQUEST_HEADERS', {})
+        # create curl object by settings
+        self._freelist = [CurlFactory.from_settings(self.settings) for _ in range(max_clients)]
 
-        # pycurl bug
-        dummy_curl_handle = pycurl.Curl()
-        self._multi.add_handle(dummy_curl_handle)
-        self._multi.remove_handle(dummy_curl_handle)
-
-        for curl in self._curls:
-            curl.setopt(pycurl.FOLLOWLOCATION, 1)
-            curl.setopt(pycurl.NOSIGNAL, 1)
-            curl.setopt(pycurl.USERAGENT, self._config["user_agent"])
-            curl.setopt(pycurl.DNS_CACHE_TIMEOUT, self._config["dns_timeout"])
-            if self._config["handle_cookies"]:
-                curl.setopt(pycurl.COOKIEJAR, "cookie_file_name")
-                curl.setopt(pycurl.COOKIEFILE, "cookie_file_name")
-            if not self._config["keep_alive"]:
-                curl.setopt(pycurl.FORBID_REUSE, 1)  # keepalive socket
-            if self._config["handle_https"]:
-                curl.setopt(pycurl.CAINFO, certifi.where())  # for https
-            if self._config["proxy"]["status"]:  # proxy setting
-                proxy_type = self._config["proxy"]["value"]["type"]
-                address = self._config["proxy"]["value"]["address"]
-
-                if proxy_type == 1:
-                    curl.setopt(pycurl.PROXYTYPE, 1)
-                    curl.setopt(pycurl.PROXY, address)  # http proxy
-                elif proxy_type == 5:
-                    curl.setopt(pycurl.PROXYTYPE, 5)
-                    curl.setopt(pycurl.PROXY, address)  # socks5 porxy
-            curl.setopt(pycurl.MAXREDIRS, self._config["max_redirs"])  # http redirect
-            curl.setopt(pycurl.TIMEOUT, self._config["timeout"])
-            curl.setopt(pycurl.CONNECTTIMEOUT, self._config["connect_timeout"])
-            curl.setopt(pycurl.ENCODING, self._config["encoding"])  # HTTP data is compressed
+    @staticmethod
+    def _read_settings(settings):
+        # read default settings
+        this_settings = {}
+        for key in dir(defaults):
+            if key.isupper():
+                this_settings[key] = getattr(defaults, key)
+        if isinstance(settings, dict):
+            this_settings.update(settings)
+        return this_settings
 
     @staticmethod
     def _get_detail_info(curl):
         """获取其他详细信息"""
         if not isinstance(curl, pycurl.Curl):
-            raise TypeError("curl_obj必须是Curl的对象")
+            raise TypeError("'{}' must be an instance of 'pycurl.Curl'".format(curl))
         detail_info = dict(
             effective_url=curl.getinfo(pycurl.EFFECTIVE_URL),              # 返回地址
             primary_ip=curl.getinfo(pycurl.PRIMARY_IP),                    # 返回IP地址
@@ -147,11 +163,7 @@ class AsyncHTTPClient(object):
             request.callback(response)
 
     def _cookies_and_headers(self, headers_bytes):
-        """ handle cookies and headers
-        :param headers_bytes:
-        :return:
-        """
-
+        """处理cookies和headers"""
         headers = dict()
         cookies = list()
         headers_str = self._decode_headers(headers_bytes)
@@ -173,12 +185,7 @@ class AsyncHTTPClient(object):
         return headers, cookies
 
     def _decode_headers(self, headers_bytes):
-        """
-        :param headers_bytes:
-
-        :return:
-        """
-
+        """解码headers"""
         headers_str = ''
         try:
             headers_str = headers_bytes.decode('ascii')
@@ -201,24 +208,18 @@ class AsyncHTTPClient(object):
 
     def _start_request(self, curl, request):
         """开始发送请求"""
-
         if not isinstance(request, Request):
-            raise TypeError("request必须是Request对象")
-
+            raise TypeError("'{}' must be an instance of Request".format(request))
         method = request.method
         self._make_request_header(curl, request.headers)
 
-        try:
-            if method == "GET" or method == "get":
-                curl.setopt(pycurl.URL, request.url)
-            elif method == "POST" or method == "post":
-                curl.setopt(pycurl.URL, request.url)
-                curl.setopt(pycurl.POSTFIELDS, urlencode(request.data))
-            else:
-                raise ValueError("request错误的请求方法")
-        except Exception as e:
-            raise Exception("start request error")
-
+        if method == "GET" or method == "get":
+            curl.setopt(pycurl.URL, request.url)
+        elif method == "POST" or method == "post":
+            curl.setopt(pycurl.URL, request.url)
+            curl.setopt(pycurl.POSTFIELDS, urlencode(request.data))
+        else:
+            raise ValueError("request.method must be 'GET' or 'POST'")
         curl.response_header = BytesIO()  # 返回的headers
         curl.response_content = BytesIO()  # 返回的网页内容
         curl.setopt(pycurl.HEADERFUNCTION, curl.response_header.write)
@@ -257,7 +258,6 @@ class AsyncHTTPClient(object):
                     self._multi.remove_handle(c)
                     self._freelist.append(c)
                 for c, errno, errmsg in err_list:
-
                     if self.handle_request_error is not None:
                         self.handle_request_error(c.request, errmsg)
                     else:
