@@ -6,18 +6,6 @@
 # ---------------------------------------
 
 
-
-
-#!/usr/bin/env python
-# _*_ encoding: utf-8 _*_
-# @author: jlfgeek
-# @time: 2017-07-28 06:16:00
-
-
-from io import BytesIO
-
-# We should ignore SIGPIPE when using pycurl.NOSIGNAL - see
-# the libcurl tutorial for more info.
 try:
     import signal
     from signal import SIGPIPE, SIGKILL, SIG_IGN
@@ -25,26 +13,22 @@ try:
 except ImportError:
     raise ImportError("import signal module error")
 
+
 import pycurl
 import certifi
-import chardet
-from urllib.parse import urlencode
-from myspider.utils.log import Logger
-from myspider.myhttp.request import Request
-from myspider.myhttp.response import Response
-from myspider.utils.python import load_object
-from myspider.myhttp import defaults
-from myspider.myhttp.exceptions import ParseHeaderException
 
+from myspider.myhttp import defaults
+from myspider.myhttp import processor
+from myspider.utils.log import Logger
 
 logger = Logger.get_logger('AsyncHTTPClient', Logger.INFO, 'console')
 
 
 # CURL参数和默认配置的映射
 CURL_PARAMS_MAP = {
-    'FOLLOWLOCATION': (pycurl.FOLLOWLOCATION, 1),
+    # 'FOLLOWLOCATION': (pycurl.FOLLOWLOCATION, 1), #　自动跳转
     'NOSIGNAL': (pycurl.NOSIGNAL, 1),
-    'KEEP_ALIVE_ENABLED': (pycurl.FORBID_REUSE, 1),
+    # 'KEEP_ALIVE_ENABLED': (pycurl.FORBID_REUSE, 1),
     'CONTENT_ENCODING': (pycurl.ENCODING, 'gzip'),
     'HTTPS_ENABLED': (pycurl.CAINFO, certifi.where()),
     'DNS_TIMEOUT': (pycurl.DNS_CACHE_TIMEOUT, None),
@@ -68,20 +52,12 @@ class CurlFactory(object):
             if v[1] is None and settings.get(k, None):
                 params, value = v[0], settings[k]
                 curl.setopt(params, value)
-
         if settings.get('COOKIES_ENABLED', None):
             curl.setopt(pycurl.COOKIEJAR, 'cookies_file')
             curl.setopt(pycurl.COOKIEFILE, 'cookies_file')
         if settings.get('HTTP_PROXY', None):
             curl.setopt(pycurl.PROXYTYPE, settings['HTTP_PROXY']['type'])
             curl.setopt(pycurl.PROXY, settings['HTTP_PROXY']['url'])
-        if settings.get('USER_AGENT_CLASS', None):
-            user_agent_cls = load_object(settings['USER_AGENT_CLASS'])
-            if not hasattr(user_agent_cls, 'agent'):
-                raise NotImplementedError
-            else:
-                user_agent = user_agent_cls.agent()
-                curl.setopt(pycurl.USERAGENT, user_agent)
         return curl
 
 
@@ -95,10 +71,17 @@ class AsyncHTTPClient(object):
         self.handle_request_error = handle_request_error    # callback, handle request error
         self.settings = self._read_settings(settings)
 
-        # headers
-        self.headers = self.settings.get('REQUEST_HEADERS', {})
         # create curl object by settings
-        self._freelist = [CurlFactory.from_settings(self.settings) for _ in range(max_clients)]
+        self._curls = [CurlFactory.from_settings(self.settings) for _ in range(max_clients)]
+        self._freelist = self._curls[:]
+
+        # init request processor and response processor
+        self.request_processor = processor.RequestProcessor.from_settings(self.settings)
+        self.response_processor = processor.ResponseProcessor()
+
+        # middleware
+
+
 
     @staticmethod
     def _read_settings(settings):
@@ -111,132 +94,21 @@ class AsyncHTTPClient(object):
             this_settings.update(settings)
         return this_settings
 
-    @staticmethod
-    def _get_detail_info(curl):
-        """获取其他详细信息"""
-        if not isinstance(curl, pycurl.Curl):
-            raise TypeError("'{}' must be an instance of 'pycurl.Curl'".format(curl))
-        detail_info = dict(
-            effective_url=curl.getinfo(pycurl.EFFECTIVE_URL),              # 返回地址
-            primary_ip=curl.getinfo(pycurl.PRIMARY_IP),                    # 返回IP地址
-            http_code=curl.getinfo(pycurl.HTTP_CODE),                      # 返回的HTTP状态码
-            total_time=curl.getinfo(pycurl.TOTAL_TIME),                    # 传输结束所消耗的总时间
-            namelookup_time=curl.getinfo(pycurl.NAMELOOKUP_TIME),          # DNS解析所消耗的时间
-            connect_time=curl.getinfo(pycurl.CONNECT_TIME),                # 建立连接所消耗的时间
-            pretransfer_time=curl.getinfo(pycurl.PRETRANSFER_TIME),        # 从建立连接到准备传输所消耗的时间
-            starttransfer_time=curl.getinfo(pycurl.STARTTRANSFER_TIME),    # 从建立连接到传输开始消耗的时间
-            redirect_time=curl.getinfo(pycurl.REDIRECT_TIME),              # 重定向所消耗的时间
-            size_upload=curl.getinfo(pycurl.SIZE_UPLOAD),                  # 上传数据包大小
-            size_download=curl.getinfo(pycurl.SIZE_DOWNLOAD),              # 下载数据包大小
-            speed_download=curl.getinfo(pycurl.SPEED_DOWNLOAD),            # 平均下载速度
-            speed_upload=curl.getinfo(pycurl.SPEED_UPLOAD),                # 平均上传速度
-            header_size=curl.getinfo(pycurl.HEADER_SIZE))                  # HTTP头部大小
-        logger.debug("%s%s", "detail_info:　　", detail_info)
-        return detail_info
-
-    def handle_result(self, curl):
-        if not isinstance(curl, pycurl.Curl):
-            raise TypeError("curl_obj必须是Curl的对象")
-
-        curl.response_header.seek(0)
-        curl.response_content.seek(0)
-        headers_bytes = curl.response_header.getvalue()
-        body = curl.response_content.getvalue()
-
-        # 关闭缓冲区
-        curl.response_header.close()
-        curl.response_content.close()
-
-        headers, cookies = self._cookies_and_headers(headers_bytes)
-        detail_info = self._get_detail_info(curl)
-        url = detail_info['effective_url']
-        status_code = detail_info['http_code']
-
+    def process_response(self, curl):
+        """处理response"""
         request = curl.request
-        response = Response(headers, status_code, body, url, request)
+        response = self.response_processor.process_response(curl)
+        logger.info("[%s]  %s  %s", "http_result", response.status_code, request.url)
 
-        logger.info("[%s]  %s  %s", "http_result", status_code, request.url)
-
-        if self.handle_response is not None:                   # 回调函数, 处理response
+        if self.handle_response is not None:              # 回调函数, 处理response
             self.handle_response(response)
         elif request.callback is not None:
             request.callback(response)
 
-    def _cookies_and_headers(self, headers_bytes):
-        """处理cookies和headers"""
-        headers = dict()
-        cookies = list()
-        headers_str = self._decode_headers(headers_bytes)
+    def process_request(self, curl, request):
+        """request"""
 
-        if headers_str:
-            lines = headers_str.split('\r\n\r\n')[-2].split("\r\n")[1:-1]
-            for line in lines:
-                header_line = line.split(":")
-                if header_line[0].lower() == "set-cookie":
-                    cookies.append({header_line[1]})
-                else:
-                    if len(header_line) == 2:
-                        headers[header_line[0]] = header_line[1]
-                    elif len(header_line) == 1:
-                        headers[header_line[0]] = ''
-                    else:
-                        pass
-        logger.debug("%s%s", "response_cookie:    ", cookies)
-        return headers, cookies
-
-    def _decode_headers(self, headers_bytes):
-        """解码headers"""
-        headers_str = ''
-        try:
-            headers_str = headers_bytes.decode('ascii')
-        except UnicodeDecodeError:
-            try:
-                headers_str = headers_bytes.decode('utf-8')
-            except UnicodeDecodeError:
-                try:
-                    headers_str = headers_bytes.decode('gbk')
-                except UnicodeDecodeError:
-                    try:
-                        encoding = chardet.detect(headers_bytes)['encoding']
-                        headers_str = headers_bytes.decode(encoding)
-                    except UnicodeDecodeError:
-                        print("headers_bytes", headers_bytes)
-                        raise ParseHeaderException("解码headers出错了")
-
-        logger.debug("%s---start---\n%s%s", "response_header:\n", headers_str, '---end---')
-        return headers_str
-
-    def _start_request(self, curl, request):
-        """开始发送请求"""
-        if not isinstance(request, Request):
-            raise TypeError("'{}' must be an instance of Request".format(request))
-        method = request.method
-        self._make_request_header(curl, request.headers)
-
-        if method == "GET" or method == "get":
-            curl.setopt(pycurl.URL, request.url)
-        elif method == "POST" or method == "post":
-            curl.setopt(pycurl.URL, request.url)
-            curl.setopt(pycurl.POSTFIELDS, urlencode(request.data))
-        else:
-            raise ValueError("request.method must be 'GET' or 'POST'")
-        curl.response_header = BytesIO()  # 返回的headers
-        curl.response_content = BytesIO()  # 返回的网页内容
-        curl.setopt(pycurl.HEADERFUNCTION, curl.response_header.write)
-        curl.setopt(pycurl.WRITEFUNCTION, curl.response_content.write)
-        curl.request = request                             # 将当前request传给client，以便于以后调用
-
-    def _make_request_header(self, curl, headers):
-        if headers is not None:
-            headers.update(self.headers)
-        else:
-            headers = self.headers
-        headers_list = []
-        for key in headers:
-            line = ": ".join([key, headers[key]])
-            headers_list.append(line)
-        logger.debug("%s%s", "request_cookie:   ", headers_list)
-        curl.setopt(pycurl.HTTPHEADER, headers_list)
+        self.request_processor.process_request(curl, request)
 
     def start(self):
         """main loop"""
@@ -245,7 +117,7 @@ class AsyncHTTPClient(object):
                 curl = self._freelist.pop()
                 request = self.request_queue.get()
                 if request:
-                    self._start_request(curl, request)           # send request
+                    self.process_request(curl, request)           # send request
                     self._multi.add_handle(curl)
             while True:
                 ret, num_handles = self._multi.perform()
@@ -253,17 +125,18 @@ class AsyncHTTPClient(object):
                     break
             while True:
                 num_q, ok_list, err_list = self._multi.info_read()
-                for c in ok_list:
-                    self.handle_result(c)
-                    self._multi.remove_handle(c)
-                    self._freelist.append(c)
-                for c, errno, errmsg in err_list:
+                for curl in ok_list:
+                    self.process_response(curl)
+                    self._multi.remove_handle(curl)
+                    self._freelist.append(curl)
+                for curl, errno, errmsg in err_list:
                     if self.handle_request_error is not None:
-                        self.handle_request_error(c.request, errmsg)
+                        self.handle_request_error(curl.request, errmsg)
                     else:
-                        logger.info("[%s]  %s  %s", "HTTP_STATUS", c.request.url, errmsg)
-                    self._multi.remove_handle(c)
-                    self._freelist.append(c)
+                        logger.info("[%s]  %s  %s", "HTTP_STATUS", curl.request.url, errmsg)
+                    self._multi.remove_handle(curl)
+                    self._freelist.append(curl)
                 if num_q == 0:
                     break
             self._multi.select(5.0)
+
