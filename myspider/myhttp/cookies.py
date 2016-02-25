@@ -7,7 +7,8 @@
 
 
 import time
-from http.cookiejar import CookieJar as _CookieJar, DefaultCookiePolicy, IPV4_RE
+from http.cookiejar import CookieJar as _CookieJar, MozillaCookieJar as _MozillaCookieJar, \
+    DefaultCookiePolicy, IPV4_RE
 from myspider.utils.python import to_unicode
 from myspider.utils.http import urlparse_cached
 
@@ -15,7 +16,7 @@ from myspider.utils.http import urlparse_cached
 class CookieJar(object):
     def __init__(self, policy=None, check_expired_frequency=10000):
         self.policy = policy or DefaultCookiePolicy()
-        self.jar = _CookieJar(self.policy)
+        self.jar = _CookieJar(policy=self.policy)
         self.jar._cookies_lock = _DummyLock()
         self.check_expired_frequency = check_expired_frequency
         self.processed = 0
@@ -86,6 +87,17 @@ class CookieJar(object):
 
     def set_cookie_if_ok(self, cookie, request):
         self.jar.set_cookie_if_ok(cookie, MockRequest(request))
+
+
+class MozillaCookieJar(CookieJar):
+    """Mozilla cookies"""
+
+    def __init__(self, policy=None, check_expired_frequency=10000):
+        super(MozillaCookieJar, self).__init__(policy, check_expired_frequency)
+        self.jar = _MozillaCookieJar(filename='cookies', policy=self.policy)
+
+    def save(self):
+        self.jar.save()
 
 
 def potential_domain_matches(domain):
