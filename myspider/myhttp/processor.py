@@ -6,14 +6,23 @@
 # ---------------------------------------
 
 
-from io import BytesIO
+import copy
 import pycurl
-from myspider.utils.python import load_object
+from io import BytesIO
+from urllib.parse import urlencode
+
+from myspider.myhttp.handler import ResponseHeadersHandler
+from myspider.myhttp.headers import Headers
+from myspider.myhttp.request import Request
 from myspider.myhttp.response import Response
-from myspider.myhttp.headers import ResponseHeaders
+from myspider.utils.log import Logger
+from myspider.utils.python import load_object
 
 
-class RequestMiddleware(object):
+logger = Logger.get_logger('LLLL', Logger.DEBUG, 'console')
+
+
+class RequestProcessor(object):
     """处理request"""
 
     def __init__(self, settings):
@@ -24,39 +33,62 @@ class RequestMiddleware(object):
         return cls(settings=settings)
 
     def process_request(self, curl, request):
-        curl.response_header = BytesIO()   # 返回的headers
+        if not isinstance(request, Request):
+            raise TypeError("'{}' must be an instance of Request".format(request))
+        self._wrap_request(curl, request)
+
+    def _wrap_request(self, curl, request):
+        """将request的请求信息打包转换成pycurl参数
+
+        """
+        method = request.method
+        if method.lower() == "get":
+            try:
+                curl.setopt(pycurl.URL, request.url)
+            except Exception as e:
+                print(method, request.url)
+
+        elif method.lower() == "post":
+            curl.setopt(pycurl.URL, request.url)
+            curl.setopt(pycurl.POSTFIELDS, urlencode(request.data))
+        else:
+            raise ValueError("request.method must be 'GET' or 'POST'")
+
+        # handle request headers
+        headers = Headers(self.settings.get('REQUEST_HEADERS', {}))
+        if request.headers is not None:
+            if not isinstance(request.headers, dict):
+                raise TypeError(
+                    "'{headers} must be a dict'".format(headers=request.headers)
+                )
+            headers.update(request.headers)
+
+        # handle request user_agent
+        if not headers.get('user-agent', None):
+            if self.settings.get('USER_AGENT_CLASS', None):
+                user_agent_cls = load_object(self.settings['USER_AGENT_CLASS'])
+                if not hasattr(user_agent_cls, 'agent'):
+                    raise NotImplementedError
+                else:
+                    user_agent = user_agent_cls.agent()
+                    headers['User-Agent'] = user_agent
+
+        headers_list = headers.to_unicode_list()
+        curl.setopt(pycurl.HTTPHEADER, headers_list)
+
+        # callback function for headers and body
+        curl.response_header = BytesIO()  # 返回的headers
         curl.response_content = BytesIO()  # 返回的网页内容
         curl.setopt(pycurl.HEADERFUNCTION, curl.response_header.write)
         curl.setopt(pycurl.WRITEFUNCTION, curl.response_content.write)
-        curl.request = request             # 将request对象绑定到curl上，以便以后调用
-
-        print(hasattr(curl, 'request'))
-        # handle request headers
-        default_headers = self.settings.get('REQUEST_HEADERS', {})
-        if request.headers is not None:
-            headers = request.headers
-            if not isinstance(headers, dict):
-                raise TypeError("'{headers} must be a dict'".format(headers=request.headers))
-            headers.update(default_headers)
-        else:
-            headers = default_headers
-        headers_list = [": ".join([k, v]) for k, v in headers.items()]
-        print(headers_list)
-        curl.setopt(pycurl.HTTPHEADER, headers_list)
-
-        # handle request user_agent
-        if self.settings.get('USER_AGENT_CLASS', None):
-            user_agent_cls = load_object(self.settings['USER_AGENT_CLASS'])
-            if not hasattr(user_agent_cls, 'agent'):
-                raise NotImplementedError
-            else:
-                user_agent = user_agent_cls.agent()
-                curl.setopt(pycurl.USERAGENT, user_agent)
+        curl.request = request  # 将request对象绑定到curl上，以便以后调用
         return None
 
 
-class ResponseMiddleware(object):
-    """处理response"""
+class ResponseProcessor(object):
+    """处理response
+
+    """
 
     def process_response(self, curl):
         curl.response_header.seek(0)
@@ -66,14 +98,17 @@ class ResponseMiddleware(object):
         body = curl.response_content.getvalue()
         detail = self._response_detail(curl)
         url = detail['effective_url']
-        http_code = detail['http_code']
-        headers = ResponseHeaders(headers_bytes)
+        status = detail['http_code']
 
-        print(body)
-
-        request = curl.request
+        headers = ResponseHeadersHandler(headers_bytes).headers
+        request = copy.deepcopy(curl.request)
         self._process_close(curl)
-        return Response(headers=None, status_code=http_code, body=body, url=url, request=request)
+
+        return Response(url,
+                        status,
+                        headers,
+                        body,
+                        request)
 
     def _process_close(self, curl):
         # 关闭缓冲区
@@ -87,8 +122,11 @@ class ResponseMiddleware(object):
                 delattr(curl, attr)
 
     def _response_detail(self, curl):
-        """获取curl详细信息"""
-        detail = dict(
+        """  http response detail information
+        :param curl: The `~pycurl.PyCurl` instance
+
+        """
+        return dict(
             effective_url=curl.getinfo(pycurl.EFFECTIVE_URL),  # 返回地址
             primary_ip=curl.getinfo(pycurl.PRIMARY_IP),  # 返回IP地址
             http_code=curl.getinfo(pycurl.HTTP_CODE),  # 返回的HTTP状态码
@@ -104,4 +142,3 @@ class ResponseMiddleware(object):
             speed_upload=curl.getinfo(pycurl.SPEED_UPLOAD),  # 平均上传速度
             header_size=curl.getinfo(pycurl.HEADER_SIZE))  # HTTP头部大小
         # logger.debug("%s%s", "detail_info:　　", detail_info)
-        return detail
