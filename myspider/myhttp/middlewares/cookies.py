@@ -9,33 +9,11 @@
 from collections import defaultdict
 from myspider.myhttp.headers import Headers
 from myspider.myhttp.response import Response
-from myspider.myhttp.cookies import CookieJar
+from myspider.myhttp.cookies import CookieJar, MozillaCookieJar
+from myspider.queuelib.dicts import RedisDict
 
 
-class CookiesMiddleware(object):
-
-    def __init__(self):
-        self.jars = defaultdict(CookieJar)
-
-    def process_request(self, request):
-        jar = self.jars['cookie_jar']
-        cookies = self._get_request_cookies(jar, request)
-        for cookie in cookies:
-            print('cookie:', cookie)
-            jar.set_cookie_if_ok(cookie, request)
-
-        request.headers.pop('Cookie', None)
-        jar.add_cookie_header(request)
-        print('cookie middleware', request.headers)
-
-    def process_response(self, request, response):
-        if request.meta.get('dont_merge_cookies', False):
-            return response
-
-        # extract cookies from Set-Cookie and drop invalid/expired cookies
-        jar = self.jars['cookie_jar']
-        jar.extract_cookies(response, request)
-        return response
+class CookiesMixin(object):
 
     def _format_cookie(self, cookie):
 
@@ -57,3 +35,54 @@ class CookiesMiddleware(object):
         response = Response(request.url, headers=headers)
         cookies = jar.make_cookies(response, request)
         return cookies
+
+
+class CookiesMiddleware(CookiesMixin):
+
+    def __init__(self):
+        self.jars = defaultdict(CookieJar)
+
+    def process_request(self, request, curl):
+        jar = self.jars['cookie_jar']
+        cookies = self._get_request_cookies(jar, request)
+        for cookie in cookies:
+            jar.set_cookie_if_ok(cookie, request)
+        request.headers.pop('Cookie', None)
+        jar.add_cookie_header(request)
+
+    def process_response(self, request, response):
+        if request.meta.get('dont_merge_cookies', False):
+            return response
+
+        # extract cookies from Set-Cookie and drop invalid/expired cookies
+        jar = self.jars['cookie_jar']
+        jar.extract_cookies(response, request)
+        return response
+
+
+class RedisCookiesMiddleware(CookiesMixin):
+
+    def __init__(self):
+        self.jars = RedisDict('redis-cookie-file')
+        self.jars.add('cookie', MozillaCookieJar())
+
+    def process_request(self, request, curl):
+        jar = self.jars.get('cookie')
+        cookies = self._get_request_cookies(jar, request)
+        for cookie in cookies:
+            jar.set_cookie_if_ok(cookie, request)
+
+        request.headers.pop('Cookie', None)
+        jar.add_cookie_header(request)
+        self.jars.add('cookie', jar)
+
+    def process_response(self, request, response):
+        if request.meta.get('dont_merge_cookies', False):
+            return response
+
+        # extract cookies from Set-Cookie and drop invalid/expired cookies
+        jar = self.jars.get('cookie')
+        jar.extract_cookies(response, request)
+        jar.save()
+        self.jars.add('cookie', jar)
+        return response
