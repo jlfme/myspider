@@ -8,7 +8,7 @@
 
 import re
 from w3lib.http import headers_dict_to_raw
-from myspider.utils.datastructs import CaselessDict
+from myspider.utils.datastructs import CaseInsensitiveDict
 from myspider.utils.python import to_unicode
 
 
@@ -109,7 +109,7 @@ class ResponseHeaders(object):
                 print('NONE------', cookie)
 
 
-class Headers(CaselessDict):
+class Headers(CaseInsensitiveDict):
     """Case insensitive http headers dictionary"""
 
     def __init__(self, seq=None, encoding='utf-8'):
@@ -194,7 +194,7 @@ class Headers(CaselessDict):
         """ Return headers as a CaselessDict with unicode keys
         and unicode values. Multiple values are joined with ','.
         """
-        return CaselessDict(
+        return CaseInsensitiveDict(
             (to_unicode(key, encoding=self.encoding),
              to_unicode(b','.join(value), encoding=self.encoding))
             for key, value in self.items())
