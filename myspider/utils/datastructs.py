@@ -9,15 +9,14 @@
 from collections import Mapping
 
 
-class CaselessDict(dict):
-    """
-    大小写不敏感字典
+class CaseInsensitiveDict(dict):
+    """  不区分大小写的dict
     """
 
     __slots__ = ()
 
     def __init__(self, seq=None):
-        super(CaselessDict, self).__init__()
+        super(CaseInsensitiveDict, self).__init__()
         if seq:
             self.update(seq)
 
@@ -55,7 +54,7 @@ class CaselessDict(dict):
     def update(self, seq):
         seq = seq.items() if isinstance(seq, Mapping) else seq
         iseq = ((self.normkey(k), self.normvalue(v)) for k, v in seq)
-        super(CaselessDict, self).update(iseq)
+        super(CaseInsensitiveDict, self).update(iseq)
 
     @classmethod
     def fromkeys(cls, keys, value=None):
