@@ -23,7 +23,7 @@ DNS_TIMEOUT = 3600
 CONNECT_TIMEOUT = 30
 
 # 启用代理
-HTTP_PROXY_ENABLED = True
+HTTP_PROXY_ENABLED = False
 # 代理配置, 启用代理时使用这个配置
 HTTP_PROXY_INFO = {
     "type": 5,
@@ -42,3 +42,9 @@ DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:55.0) Gecko/2
 
 # # 默认的UA处理类
 USER_AGENT_CLASS = 'myspider.myhttp.useragent.RandomUserAgent'
+
+
+MIDDLEWARES_BASE = {
+    'myspider.myhttp.middlewares.cookies.RedisCookiesMiddleware': 111,
+    'myspider.myhttp.middlewares.useragent.UserAgentMiddleware': 222
+}
