@@ -15,11 +15,11 @@ from myspider.myhttp.handler import ResponseHeadersHandler
 from myspider.myhttp.headers import Headers
 from myspider.myhttp.request import Request
 from myspider.myhttp.response import Response
-from myspider.utils.log import Logger
+from myspider.log import get_logger
 from myspider.utils.python import load_object
 
 
-logger = Logger.get_logger('LLLL', Logger.DEBUG, 'console')
+logger = get_logger('processor', 'DEBUG', 'console')
 
 
 class RequestProcessor(object):
@@ -47,7 +47,6 @@ class RequestProcessor(object):
                 curl.setopt(pycurl.URL, request.url)
             except Exception as e:
                 print(method, request.url)
-
         elif method.lower() == "post":
             curl.setopt(pycurl.URL, request.url)
             curl.setopt(pycurl.POSTFIELDS, urlencode(request.data))
@@ -74,6 +73,7 @@ class RequestProcessor(object):
                     headers['User-Agent'] = user_agent
 
         headers_list = headers.to_unicode_list()
+        logger.debug('\n[%s]: %s\n[headers]: %s', request.method, request.url, headers_list)
         curl.setopt(pycurl.HTTPHEADER, headers_list)
 
         # callback function for headers and body
@@ -87,9 +87,7 @@ class RequestProcessor(object):
 
 class ResponseProcessor(object):
     """处理response
-
     """
-
     def process_response(self, curl):
         curl.response_header.seek(0)
         curl.response_content.seek(0)
