@@ -31,6 +31,7 @@ class HttpDownloader(threading.Thread):
         address = self.ip_queue.pop()
         if address:
             address = address.decode("utf-8")
+            print("正在获取新的ip地址", address)
             self.client.set_proxy(address)
 
         while True:
@@ -44,6 +45,7 @@ class HttpDownloader(threading.Thread):
                 address = self.ip_queue.pop()
                 if address:
                     address = address.decode("utf-8")
+                    print("正在获取新的ip地址", address)
                     self.client.set_proxy(address)
 
             else:
@@ -71,14 +73,11 @@ class HttpClient(object):
                             max_redirs=5,
                             timeout=20,
                             connect_timeout=20,
-                            proxy={"status": False,
-                                   "value": {"type": 1, "address": "http://42.243.203.61:8998"}})
+                            proxy={"status": False, "value": {"type": 1, "address": "http://42.243.203.61:8998"}})
 
-        self.headers = [
-            "Accept-Language: zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3",
-            "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Encoding: gzip"
-        ]
+        self.headers = ["Accept-Language: zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3",
+                        "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "Accept-Encoding: gzip"]
 
         self._last_request_url = None        # 上一次请求的url
 
@@ -87,6 +86,7 @@ class HttpClient(object):
 
         if request.url == self._last_request_url:  # 比较这次和上次请求地址是否属于同一个域名
             self._client.setopt(pycurl.FORBID_REUSE, 0)  # 相同就保持长连接
+
         else:
             self._client.setopt(pycurl.FORBID_REUSE, 1)  # 不相同就断开连接
 
@@ -94,6 +94,7 @@ class HttpClient(object):
             self.headers = request.headers
 
         self._client.setopt(pycurl.FOLLOWLOCATION, 1)
+
         self._client.setopt(pycurl.USERAGENT, self._config["user_agent"])
         self._client.setopt(pycurl.DNS_CACHE_TIMEOUT, self._config["dns_timeout"])
         if self._config["handle_cookies"]:
@@ -183,21 +184,13 @@ class HttpClient(object):
         return self._get_response(request, response_header, content)  # 处理请求然后返回response对象
 
     def _get_response(self, request, response_header, content):
-
         headers, cookies = self._get_cookies_and_headers(response_header)
-        # print(cookies, headers)
-
         body = content.getvalue()
-
         body = self._undecode_response(headers, body)
         detail_info = self._get_detail_info()
-        status_code = detail_info["http_code"]
+        status = detail_info["http_code"]
         url = detail_info["effective_url"]
-        response = Response(headers=headers,
-                            status_code=status_code,
-                            body=body,
-                            url=url,
-                            request=request)
+        response = Response(url=url, status=status, headers=headers, body=body, request=request)
         return response
 
     def _undecode_response(self, headers, body):
@@ -252,4 +245,4 @@ class HttpClient(object):
 if __name__ == "__main__":
     client = HttpClient()
     ok = client.start_request(Request(url="http://www.youku.com"))
-    print(ok.status_code, ok.url, ok.headers)
+    print(ok)
