@@ -21,16 +21,16 @@ import pycurl
 import certifi
 
 from myspider.myhttp import defaults, processor
-from myspider.utils.log import Logger
+from myspider.log import get_logger
 from myspider.myhttp.middlewares import MiddlewareManager
 
 
-logger = Logger.get_logger('AsyncHTTPClient', Logger.INFO, 'console')
+logger = get_logger('AsyncHTTPClient', 'INFO', 'console')
 
 
 # CURL参数和默认配置的映射
 CURL_PARAMS_MAP = {
-    'CONTENT_ENCODING': (pycurl.ENCODING, 'gzip'),
+    'CONTENT_ENCODING': (pycurl.ENCODING, 'gzip, deflate'),
     'HTTPS_ENABLED': (pycurl.CAINFO, certifi.where()),
     'NOSIGNAL': (pycurl.NOSIGNAL, 1),
     'DNS_TIMEOUT': (pycurl.DNS_CACHE_TIMEOUT, None),
@@ -118,7 +118,8 @@ class AsyncHTTPClient(object):
         """处理response"""
         request = curl.request
         response = self.response_processor.process_response(curl)
-        logger.info("[%s]  %s  %s", "http_result", response.status, request.url)
+        logger.info("<HTTP_STATUS>: %s <url>: %s <headers>: %s",
+                    response.status, request.url, response.headers.to_unicode_list())
         # 调用中间件
         self.middleware.run_method('process_response', request, response)
         # 回调函数, 处理response
@@ -153,7 +154,7 @@ class AsyncHTTPClient(object):
                     if self.request_error_handler is not None:
                         self.request_error_handler(curl.request, errmsg)
                     else:
-                        logger.info("[%s]  %s  %s", "HTTP_STATUS", curl.request.url, errmsg)
+                        logger.error("[%s]  %s  %s", "HTTP_STATUS", curl.request.url, errmsg)
                     self._multi.remove_handle(curl)
                     self._freelist.append(curl)
                 if num_q == 0:
